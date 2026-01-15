@@ -4,6 +4,8 @@ import android.content.Context;
 import android.util.Log;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * DeepFilterNet 降噪引擎 JNI 接口（基于 Tract 框架）
