@@ -1,0 +1,4 @@
+[submodule "DeepFilterNet"]
+	path = DeepFilterNet
+	url = https://github.com/hzexe/DeepFilterNet.git
+	branch = my-modifications
