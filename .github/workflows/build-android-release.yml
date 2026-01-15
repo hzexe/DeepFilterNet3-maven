@@ -1,0 +1,143 @@
+name: Build and Release Android AAR
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Set up JDK 8
+      uses: actions/setup-java@v4
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+    
+    - name: Setup Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Install Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r29
+    
+    - name: Cache Gradle packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+    
+    - name: Grant execute permission for gradlew
+      run: chmod +x android/gradlew
+    
+    - name: Build Android AAR
+      run: |
+        cd android
+        ./gradlew :deepfilter:assembleRelease
+    
+    - name: Prepare release artifacts
+      run: |
+        mkdir -p release
+        
+        # 复制 AAR 文件
+        cp android/deepfilter/build/outputs/aar/deepfilter-release.aar release/
+        
+        # 复制 SO 文件
+        cp android/deepfilter/src/main/jniLibs/arm64-v8a/libdeepfilter_ort.so release/
+        
+        # 创建版本信息文件
+        echo "DeepFilterNet Android Library" > release/VERSION.txt
+        echo "Version: ${GITHUB_REF#refs/tags/}" >> release/VERSION.txt
+        echo "Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> release/VERSION.txt
+        echo "Commit: ${GITHUB_SHA}" >> release/VERSION.txt
+    
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          release/deepfilter-release.aar
+          release/libdeepfilter_ort.so
+          release/VERSION.txt
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        body: |
+          ## DeepFilterNet Android Library Release
+          
+          ### 下载文件说明
+          - `deepfilter-release.aar`: Android AAR 包，包含 Java 接口和原生库
+          - `libdeepfilter_ort.so`: Rust 编译的 ARM64 动态库（可单独使用）
+          - `VERSION.txt`: 版本信息文件
+          
+          ### 使用方法
+          
+          #### 在 Android 项目中使用 AAR
+          1. 将 `deepfilter-release.aar` 复制到项目的 `libs` 目录
+          2. 在 `build.gradle` 中添加依赖：
+             ```gradle
+             implementation(fileTree(dir: "libs", include: ["*.aar"]))
+             ```
+          3. 使用示例：
+             ```java
+             import com.hzexe.audio.ns.DeepFilterNet;
+             
+             // 加载模型文件
+             byte[] modelBytes = loadModelFile();
+             DeepFilterNet df = new DeepFilterNet(modelBytes);
+             
+             // 初始化
+             df.initialize(0.5f, 30.0f);
+             
+             // 处理音频
+             ByteBuffer inputBuffer = ByteBuffer.allocateDirect(input.length * 4);
+             ByteBuffer outputBuffer = ByteBuffer.allocateDirect(input.length * 4);
+             inputBuffer.order(ByteOrder.LITTLE_ENDIAN);
+             outputBuffer.order(ByteOrder.LITTLE_ENDIAN);
+             
+             // 填充输入数据
+             for (int i = 0; i < input.length; i++) {
+                 inputBuffer.putFloat(i * 4, input[i]);
+             }
+             
+             // 处理音频
+             float lsnr = df.process(inputBuffer, 0, input.length * 4,
+                                   outputBuffer, 0, input.length * 4);
+             
+             // 释放资源
+             df.release();
+             ```
+          
+          ### 系统要求
+          - Android API 21+ (Android 5.0+)
+          - ARM64 架构设备
+          - Java 8+
+          
+          ### 注意事项
+          - 需要自行准备 DeepFilterNet3 模型文件（tar.gz 格式）
+          - 模型文件较大，建议从应用外部加载
+          - 使用 DirectByteBuffer 可以减少内存拷贝，提高性能
+          
+          ### 技术支持
+          如有问题，请提交 Issue。
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,304 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.2.0")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20")
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
+
+// 配置 NDK 版本选择
+ext {
+    // 获取操作系统路径分隔符
+    def pathSeparator = System.getProperty('file.separator')
+    
+    // NDK 基础路径（优先级：环境变量 > 默认路径）
+    // 1. 优先检查 ANDROID_SDK_ROOT 环境变量
+    // 2. 其次检查 ANDROID_HOME 环境变量
+    // 3. 最后使用默认路径
+    def defaultNdkPath = System.getenv('ANDROID_SDK_ROOT') ? 
+                        new File(System.getenv('ANDROID_SDK_ROOT'), 'ndk').absolutePath :
+                        (System.getenv('ANDROID_HOME') ? 
+                            new File(System.getenv('ANDROID_HOME'), 'ndk').absolutePath :
+                            "C:${pathSeparator}androidsdk${pathSeparator}ndk")
+    
+    ndkBasePath = project.hasProperty('ndk.base.path') ? 
+                  project.property('ndk.base.path') : 
+                  defaultNdkPath
+    
+    // NDK 版本选择策略：'auto'（自动选择最新）、'latest'（选择最新）、具体版本号（如 '25.2.9519653'）
+    ndkVersionStrategy = project.hasProperty('ndk.version.strategy') ? 
+                      project.property('ndk.version.strategy') : 
+                      'auto'
+    
+    // 指定 NDK 版本（如果 ndkVersionStrategy 为具体版本号时使用）
+    ndkVersion = project.hasProperty('ndk.version') ? 
+                 project.property('ndk.version') : 
+                 null
+    
+    // Android API 级别
+    androidApiLevel = project.hasProperty('android.api.level') ? 
+                     Integer.parseInt(project.property('android.api.level')) : 
+                     21
+    
+    // 目标 CPU 架构：'arm64-v8a'、'armeabi-v7a'、'x86_64'、'x86'
+    targetAbi = project.hasProperty('target.abi') ? 
+                 project.property('target.abi') : 
+                 'arm64-v8a'
+}
+
+// 编译 Rust 项目并复制 .so 文件到 jniLibs 目录
+task compileNative {
+    group = 'build'
+    description = '编译 Rust 项目并复制 .so 文件到 jniLibs 目录'
+    
+    doLast {
+        println '========================================'
+        println '  编译 Rust 项目'
+        println '========================================'
+        println ''
+        
+        def scriptDir = projectDir.absolutePath
+        def projectRoot = new File(scriptDir).parentFile
+        def deepfilterOrtDir = new File(projectRoot, 'deepfilter-ort')
+        def androidJniDir = new File(scriptDir, 'deepfilter/src/main/jniLibs/' + targetAbi)
+        
+        // 创建输出目录
+        if (!androidJniDir.exists()) {
+            androidJniDir.mkdirs()
+        }
+        
+        // 检查 Rust Android 目标
+        println '检查 Rust Android 目标...'
+        def rustTarget = getRustTarget(targetAbi)
+        def rustupProcess = "rustup target list --installed".execute()
+        rustupProcess.waitFor()
+        def targets = rustupProcess.text
+        if (!targets.contains(rustTarget)) {
+            println "安装 Rust Android 目标 ${rustTarget}..."
+            def addProcess = "rustup target add ${rustTarget}".execute()
+            def addExitCode = addProcess.waitFor()
+            if (addExitCode != 0) {
+                throw new GradleException("Rust Android 目标安装失败，退出码: ${addExitCode}")
+            }
+            println 'Rust Android 目标安装成功'
+        } else {
+            println "Rust Android 目标已安装: ${rustTarget}"
+        }
+        println ''
+        
+        // 检查 NDK 环境
+        println '检查 Android NDK...'
+        def ndkPath = findNdkPath()
+        println "使用 NDK: ${ndkPath}"
+        
+        if (!ndkPath.exists()) {
+            throw new GradleException("NDK 路径不存在: ${ndkPath}")
+        }
+        println ''
+        
+        // 检查交叉编译工具链
+        println '检查交叉编译工具链...'
+        def toolchainDir = new File(ndkPath, 'toolchains/llvm/prebuilt')
+        if (!toolchainDir.exists()) {
+            throw new GradleException("找不到 NDK 工具链目录: ${toolchainDir}")
+        }
+        
+        def hostOs = System.getProperty('os.name').toLowerCase()
+        def prebuiltDir = findPrebuiltToolchain(toolchainDir, hostOs)
+        println "使用工具链: ${prebuiltDir.name}"
+        println ''
+        
+        // 编译 Rust 项目
+        println "编译 deepfilter-ort (目标: ${rustTarget})..."
+        
+        // 设置 NDK 交叉编译环境变量
+        def toolchainBin = new File(prebuiltDir, 'bin')
+        def clang = getClangPath(toolchainBin, targetAbi, androidApiLevel, hostOs)
+        def clangxx = getClangxxPath(toolchainBin, targetAbi, androidApiLevel, hostOs)
+        def ar = new File(toolchainBin, 'llvm-ar' + (hostOs.contains('windows') ? '.exe' : '')).absolutePath
+        
+        // 在 Windows 上使用 cmd.exe 执行，避免交互式提示
+        def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+        def cargoCommand = "cargo build --release --target ${rustTarget}"
+        def command = isWindows ? ['cmd', '/c', cargoCommand.toString()] :
+                           ['sh', '-c', cargoCommand.toString()]
+        
+        def processBuilder = new ProcessBuilder(command)
+        processBuilder.directory(deepfilterOrtDir)
+        
+        // 设置 NDK 交叉编译环境变量
+        def env = processBuilder.environment()
+        env['CC_' + rustTarget.replace('-', '_')] = clang.toString()
+        env['CXX_' + rustTarget.replace('-', '_')] = clangxx.toString()
+        env['AR_' + rustTarget.replace('-', '_')] = ar.toString()
+        env['CARGO_TARGET_' + rustTarget.replace('-', '_').toUpperCase() + '_LINKER'] = clang.toString()
+        
+        def process = processBuilder.start()
+        
+        // 实时输出编译日志
+        def inputStream = process.getInputStream()
+        def errorStream = process.getErrorStream()
+        
+        // 使用线程来实时读取输出
+        def inputThread = Thread.start {
+            def reader = new BufferedReader(new InputStreamReader(inputStream))
+            String line
+            while ((line = reader.readLine()) != null) {
+                println line
+            }
+        }
+        
+        def errorThread = Thread.start {
+            def reader = new BufferedReader(new InputStreamReader(errorStream))
+            String line
+            while ((line = reader.readLine()) != null) {
+                System.err.println line
+            }
+        }
+        
+        def exitCode = process.waitFor()
+        
+        // 等待输出线程完成
+        inputThread.join()
+        errorThread.join()
+        
+        if (exitCode != 0) {
+            throw new GradleException("Rust 编译失败，退出码: ${exitCode}")
+        }
+        
+        // 复制 .so 文件到 jniLibs
+        println '复制 .so 文件到 jniLibs...'
+        def soFile = new File(deepfilterOrtDir, "target/${rustTarget}/release/libdeepfilter_ort.so")
+        if (!soFile.exists()) {
+            throw new GradleException("找不到编译生成的 .so 文件: ${soFile}")
+        }
+        copy {
+            from soFile
+            into androidJniDir.absolutePath
+        }
+        println ".so 文件已复制到: ${androidJniDir.absolutePath}"
+        println ''
+    }
+}
+
+// 查找 NDK 路径
+def findNdkPath() {
+    def ndkBaseDir = new File(ndkBasePath)
+    
+    if (!ndkBaseDir.exists()) {
+        throw new GradleException("NDK 基础路径不存在: ${ndkBaseDir}")
+    }
+    
+    // 如果指定了具体版本号
+    if (ndkVersion != null) {
+        def specificNdkDir = new File(ndkBaseDir, ndkVersion)
+        if (specificNdkDir.exists()) {
+            println "使用指定 NDK 版本: ${ndkVersion}"
+            return specificNdkDir
+        } else {
+            throw new GradleException("指定的 NDK 版本不存在: ${specificNdkDir}")
+        }
+    }
+    
+    // 根据策略选择 NDK 版本
+    def ndkDirs = ndkBaseDir.listFiles().findAll { it.isDirectory() }
+    
+    if (ndkDirs.isEmpty()) {
+        throw new GradleException("NDK 目录下没有找到任何 NDK 版本: ${ndkBaseDir}")
+    }
+    
+    def selectedNdkDir = null
+    
+    switch (ndkVersionStrategy) {
+        case 'latest':
+            // 选择最新版本
+            selectedNdkDir = ndkDirs.sort { a, b -> b.name <=> a.name }[0]
+            println "选择最新 NDK 版本: ${selectedNdkDir.name}"
+            break
+        case 'auto':
+        default:
+            // 自动选择：优先选择最新版本，但允许手动指定
+            selectedNdkDir = ndkDirs.sort { a, b -> b.name <=> a.name }[0]
+            println "自动选择 NDK 版本: ${selectedNdkDir.name}"
+            break
+    }
+    
+    return selectedNdkDir
+}
+
+// 查找预构建工具链
+def findPrebuiltToolchain(toolchainDir, hostOs) {
+    def prebuiltDir = null
+    
+    toolchainDir.eachDir { dir ->
+        def dirName = dir.name.toLowerCase()
+        if (dirName.contains('windows') || dirName.contains('linux') || dirName.contains('darwin')) {
+            prebuiltDir = dir
+            return
+        }
+    }
+    
+    if (prebuiltDir == null) {
+        throw new GradleException("找不到适合的预构建工具链，操作系统: ${hostOs}")
+    }
+    
+    return prebuiltDir
+}
+
+// 获取 Rust 目标
+def getRustTarget(abi) {
+    switch (abi) {
+        case 'arm64-v8a':
+            return 'aarch64-linux-android'
+        case 'armeabi-v7a':
+            return 'armv7-linux-androideabi'
+        case 'x86_64':
+            return 'x86_64-linux-android'
+        case 'x86':
+            return 'i686-linux-android'
+        default:
+            throw new GradleException("不支持的 ABI: ${abi}")
+    }
+}
+
+// 获取 Clang 路径
+def getClangPath(toolchainBin, abi, apiLevel, hostOs) {
+    def exeExt = hostOs.contains('windows') ? '.cmd' : ''
+    def target = getClangTarget(abi)
+    return new File(toolchainBin, "${target}${apiLevel}-clang${exeExt}").absolutePath
+}
+
+// 获取 Clang++ 路径
+def getClangxxPath(toolchainBin, abi, apiLevel, hostOs) {
+    def exeExt = hostOs.contains('windows') ? '.cmd' : ''
+    def target = getClangTarget(abi)
+    return new File(toolchainBin, "${target}${apiLevel}-clang++${exeExt}").absolutePath
+}
+
+// 获取 Clang 目标前缀
+def getClangTarget(abi) {
+    switch (abi) {
+        case 'arm64-v8a':
+            return 'aarch64-linux-android'
+        case 'armeabi-v7a':
+            return 'armv7a-linux-androideabi'
+        case 'x86_64':
+            return 'x86_64-linux-android'
+        case 'x86':
+            return 'i686-linux-android'
+        default:
+            throw new GradleException("不支持的 ABI: ${abi}")
+    }
+}
+
+// 确保 assembleRelease 和 assembleDebug 在编译 .so 文件后执行
+tasks.findByPath(':deepfilter:assembleRelease')?.dependsOn compileNative
+tasks.findByPath(':deepfilter:assembleDebug')?.dependsOn compileNative

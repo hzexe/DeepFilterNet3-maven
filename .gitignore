@@ -32,3 +32,65 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+
+
+# Rust 项目
+deepfilter-ort/target/
+**/target/
+Cargo.lock
+**/*.rs.bk
+.cargo/
+
+
+# C/C++ 项目
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.obj
+*.lib
+*.exp
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# 临时文件和日志
+*.log
+*.tmp
+*.temp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+*.code-workspace
+
+# 系统文件
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE 配置文件
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# 操作系统生成的文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
