@@ -302,3 +302,7 @@ def getClangTarget(abi) {
 // 确保 assembleRelease 和 assembleDebug 在编译 .so 文件后执行
 tasks.findByPath(':deepfilter:assembleRelease')?.dependsOn compileNative
 tasks.findByPath(':deepfilter:assembleDebug')?.dependsOn compileNative
+
+// 确保C++编译在Rust编译之后执行
+tasks.findByPath(':deepfilter:externalNativeBuildDebug')?.dependsOn compileNative
+tasks.findByPath(':deepfilter:externalNativeBuildRelease')?.dependsOn compileNative

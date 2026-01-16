@@ -108,6 +108,48 @@ pub extern "C" fn df_process_frame(
     }
 }
 
+// 设置后滤波器beta参数
+#[no_mangle]
+pub extern "C" fn df_set_post_filter_beta(state: *mut DeepFilterNetState, beta: f32) {
+    unsafe {
+        if !state.is_null() {
+            eprintln!("错误: state指针为空");
+            return;
+        }
+        
+        let state = &mut *state;
+        state.df.set_pf_beta(beta);
+    }
+}
+
+// 设置衰减限制
+#[no_mangle]
+pub extern "C" fn df_set_atten_lim(state: *mut DeepFilterNetState, lim_db: f32) {
+    unsafe {
+        if !state.is_null() {
+            eprintln!("错误: state指针为空");
+            return;
+        }
+        
+        let state = &mut *state;
+        state.df.set_atten_lim(lim_db);
+    }
+}
+
+// 获取帧大小
+#[no_mangle]
+pub extern "C" fn df_get_frame_size(state: *mut DeepFilterNetState) -> usize {
+    unsafe {
+        if state.is_null() {
+            eprintln!("错误: state指针为空");
+            return 0;
+        }
+        
+        let state = &*state;
+        state.df.hop_size
+    }
+}
+
 // JNI: 创建实例
 #[no_mangle]
 pub extern "system" fn Java_com_hzexe_audio_ns_DeepFilterNet_nativeCreate(
